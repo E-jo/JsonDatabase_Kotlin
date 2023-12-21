@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 const val filePath = "./src/jsondatabase/server/db.json"
+const val address = "127.0.0.1"
+const val port = 23456
+
 val reentrantReadWriteLock = ReentrantReadWriteLock()
 var running = true
 var jsonDb: JsonObject = JsonObject()
@@ -41,127 +44,14 @@ class ClientHandler(clientSocket: Socket?) : Runnable {
 
             val requestType = jsonRequest.get("type").asString
             val requestKey = jsonRequest.get("key")
+            val requestValue = jsonRequest.get("value")
 
-            val response = JsonObject()
+            var response = JsonObject()
 
             when (requestType){
-                "set" -> {
-                    reentrantReadWriteLock.readLock().lock()
-                    try {
-                        val dbString = deserialize(filePath) as String
-                        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
-                        println("DB loaded")
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                    } catch (e: ClassNotFoundException) {
-                        e.printStackTrace()
-                    } finally {
-                        reentrantReadWriteLock.readLock().unlock()
-                    }
-
-                    if (requestKey.isJsonArray) {
-                        traverseAndModify(requestKey.asJsonArray, jsonRequest.get("value"))
-                    } else {
-                        jsonDb.add(requestKey.asString, jsonRequest.get("value"))
-                    }
-
-                    reentrantReadWriteLock.writeLock().lock()
-                    try {
-                        serialize(jsonDb.toString(), filePath)
-                        response.addProperty("response", "OK")
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                        response.addProperty("response", "ERROR")
-                    } finally {
-                        reentrantReadWriteLock.writeLock().unlock()
-                    }
-                }
-                "get" -> {
-                    reentrantReadWriteLock.readLock().lock()
-                    try {
-                        val dbString = deserialize(filePath) as String
-                        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
-                        println("DB loaded")
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                    } catch (e: ClassNotFoundException) {
-                        e.printStackTrace()
-                    } finally {
-                        reentrantReadWriteLock.readLock().unlock()
-                    }
-
-                    reentrantReadWriteLock.readLock().lock()
-                    // check for a JsonArray key
-                    val jsonValue: JsonElement?
-                    if (requestKey.isJsonArray) {
-                        jsonValue = getNestedJsonValue(requestKey.asJsonArray)
-                        if (jsonValue == null) {
-                            response.addProperty("response", "ERROR")
-                            response.addProperty("reason", "No such key")
-                        } else {
-                            response.addProperty("response", "OK")
-                            response.add("value", jsonValue)
-                        }
-                    } else {
-                        // otherwise String key
-                        if (jsonDb.has(requestKey.asString)) {
-                            response.addProperty("response", "OK")
-                            response.addProperty("value", jsonDb.get(requestKey.asString).asString)
-                        } else {
-                            response.addProperty("response", "ERROR")
-                            response.addProperty("reason", "No such key")
-                        }
-                    }
-                    reentrantReadWriteLock.readLock().unlock()
-                }
-                "delete" -> {
-                    reentrantReadWriteLock.readLock().lock()
-                    try {
-                        val dbString = deserialize(filePath) as String
-                        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
-                        println("DB loaded")
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                    } catch (e: ClassNotFoundException) {
-                        e.printStackTrace()
-                    } finally {
-                        reentrantReadWriteLock.readLock().unlock()
-                    }
-
-                    if (requestKey.isJsonArray) {
-                        reentrantReadWriteLock.writeLock().lock()
-                        try {
-                            if (deleteKey(jsonRequest.getAsJsonArray("key"))) {
-                                response.addProperty("response", "OK")
-                            } else {
-                                response.addProperty("response", "ERROR")
-                                response.addProperty("reason", "No such key")
-                            }
-                            serialize(jsonDb.toString(), filePath)
-                        } finally {
-                            reentrantReadWriteLock.writeLock().unlock()
-                        }
-                    } else {
-                        // String key
-                        reentrantReadWriteLock.writeLock().lock()
-                        try {
-                            if (jsonDb.has(requestKey.asString)) {
-                                jsonDb.remove(requestKey.asString)
-                                response.addProperty("response", "OK")
-                            } else {
-                                response.addProperty("response", "ERROR")
-                                response.addProperty("reason", "No such key")
-                            }
-
-                            serialize(jsonDb.toString(), filePath)
-                            println("DB written")
-                        } catch (e: IOException) {
-                            e.printStackTrace()
-                        } finally {
-                            reentrantReadWriteLock.writeLock().unlock()
-                        }
-                    }
-                }
+                "set" -> response = set(requestKey, requestValue)
+                "get" -> response = get(requestKey)
+                "delete" -> response = delete(requestKey)
                 "exit" -> {
                     response.addProperty("response", "OK")
                     running = false
@@ -177,6 +67,139 @@ class ClientHandler(clientSocket: Socket?) : Runnable {
     }
 }
 
+fun set(requestKey: JsonElement,
+        requestValue: JsonElement
+): JsonObject {
+    val response = JsonObject()
+
+    reentrantReadWriteLock.readLock().lock()
+    try {
+        val dbString = deserialize(filePath) as String
+        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
+        println("DB loaded")
+    } catch (e: IOException) {
+        e.printStackTrace()
+    } catch (e: ClassNotFoundException) {
+        e.printStackTrace()
+    } finally {
+        reentrantReadWriteLock.readLock().unlock()
+    }
+
+    if (requestKey.isJsonArray) {
+        traverseAndModify(requestKey.asJsonArray, requestValue)
+    } else {
+        jsonDb.add(requestKey.asString, requestValue)
+    }
+
+    reentrantReadWriteLock.writeLock().lock()
+    try {
+        serialize(jsonDb.toString(), filePath)
+        response.addProperty("response", "OK")
+    } catch (e: IOException) {
+        e.printStackTrace()
+        response.addProperty("response", "ERROR")
+    } finally {
+        reentrantReadWriteLock.writeLock().unlock()
+    }
+
+    return response
+}
+
+fun get(requestKey: JsonElement): JsonObject {
+    val response = JsonObject()
+
+    reentrantReadWriteLock.readLock().lock()
+    try {
+        val dbString = deserialize(filePath) as String
+        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
+        println("DB loaded")
+    } catch (e: IOException) {
+        e.printStackTrace()
+    } catch (e: ClassNotFoundException) {
+        e.printStackTrace()
+    } finally {
+        reentrantReadWriteLock.readLock().unlock()
+    }
+
+    reentrantReadWriteLock.readLock().lock()
+    // check for a JsonArray key
+    val jsonValue: JsonElement?
+    if (requestKey.isJsonArray) {
+        jsonValue = getNestedJsonValue(requestKey.asJsonArray)
+        if (jsonValue == null) {
+            response.addProperty("response", "ERROR")
+            response.addProperty("reason", "No such key")
+        } else {
+            response.addProperty("response", "OK")
+            response.add("value", jsonValue)
+        }
+    } else {
+        // otherwise String key
+        if (jsonDb.has(requestKey.asString)) {
+            response.addProperty("response", "OK")
+            response.addProperty("value", jsonDb.get(requestKey.asString).asString)
+        } else {
+            response.addProperty("response", "ERROR")
+            response.addProperty("reason", "No such key")
+        }
+    }
+    reentrantReadWriteLock.readLock().unlock()
+
+    return response
+}
+
+fun delete(requestKey: JsonElement): JsonObject {
+    val response = JsonObject()
+
+    reentrantReadWriteLock.readLock().lock()
+    try {
+        val dbString = deserialize(filePath) as String
+        jsonDb = gson.fromJson(dbString, JsonObject::class.java)
+        println("DB loaded")
+    } catch (e: IOException) {
+        e.printStackTrace()
+    } catch (e: ClassNotFoundException) {
+        e.printStackTrace()
+    } finally {
+        reentrantReadWriteLock.readLock().unlock()
+    }
+
+    if (requestKey.isJsonArray) {
+        reentrantReadWriteLock.writeLock().lock()
+        try {
+            if (deleteKey(requestKey.asJsonArray)) {
+                response.addProperty("response", "OK")
+            } else {
+                response.addProperty("response", "ERROR")
+                response.addProperty("reason", "No such key")
+            }
+            serialize(jsonDb.toString(), filePath)
+        } finally {
+            reentrantReadWriteLock.writeLock().unlock()
+        }
+    } else {
+        // String key
+        reentrantReadWriteLock.writeLock().lock()
+        try {
+            if (jsonDb.has(requestKey.asString)) {
+                jsonDb.remove(requestKey.asString)
+                response.addProperty("response", "OK")
+            } else {
+                response.addProperty("response", "ERROR")
+                response.addProperty("reason", "No such key")
+            }
+
+            serialize(jsonDb.toString(), filePath)
+            println("DB written")
+        } catch (e: IOException) {
+            e.printStackTrace()
+        } finally {
+            reentrantReadWriteLock.writeLock().unlock()
+        }
+    }
+
+    return response
+}
 fun getNestedJsonValue(complexKeyPath: JsonArray): JsonElement? {
     var currentElement: JsonElement = jsonDb
     for (keyElement in complexKeyPath) {
@@ -235,8 +258,6 @@ fun deleteKey(targetKey: JsonArray): Boolean {
 }
 
 fun main() {
-    val address = "127.0.0.1"
-    val port = 23456
     val server = ServerSocket(port, 50, InetAddress.getByName(address))
     println("Server started!")
     reentrantReadWriteLock.readLock().lock()
