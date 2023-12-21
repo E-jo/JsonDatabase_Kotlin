@@ -1,0 +1,16 @@
+# course config files
+*.yaml
+
+# gradle
+.gradle/
+build
+
+
+# idea config
+.idea
+
+# old stages
+/JSON Database (Kotlin)/*
+!/JSON Database (Kotlin)/task/
+/JSON Database (Kotlin)/task/*
+!/JSON Database (Kotlin)/task/src
